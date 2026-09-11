@@ -1,0 +1,50 @@
+# Profile patch layer for dsh-opencode-session.
+#
+# This is the bundle's base layer: it sits below the profile's own
+# cordis.patch.yml and below $DSH_HOME/cordis.patch.yml, so a deployment can
+# override any field below or disable the row entirely.
+#
+# The row's `name` is this package, resolved from the profile's node_modules,
+# and its `config` is the upstream `@deepseek-ai/dsh-llm-pi-ai` provider
+# schema — endpoint, protocol, credential reference, and model list.
+#
+# OpenCode Go serves one wire protocol per path, and a route names one `api`,
+# so a second protocol needs a second row. Copy the block below, give the row
+# and the route distinct ids, and point `api`/`baseURL` at another path:
+#
+#   /chat/completions  openai-completions   https://opencode.ai/zen/go/v1
+#   /messages          anthropic-messages   https://opencode.ai/zen/go
+#   /responses         openai-responses     https://opencode.ai/zen/go/v1
+#
+# The Anthropic base carries no /v1 suffix because pi-ai's Anthropic
+# implementation appends /v1/messages itself.
+
+- insert:
+    - id: opencode-session
+      name: dsh-opencode-session
+      config:
+        providers:
+          opencode-go-chat:
+            displayName: OpenCode Go · Chat
+            apiKeyEnv: OPENCODE_GO_API_KEY
+            api: openai-completions
+            baseURL: https://opencode.ai/zen/go/v1
+            models:
+              - id: deepseek-flash
+                name: DeepSeek V4.1 Flash
+                contextWindow: 1000000
+                maxTokens: 256000
+                # Text-only on this endpoint: OpenCode Go serves images through
+                # the separate `deepseek-v4-flash-vision-exp` model.
+                input: [text]
+                reasoningEfforts:
+                  off:
+                  low: low
+                  high: high
+                  max: max
+                compat:
+                  supportsStore: false
+                  supportsDeveloperRole: false
+                  maxTokensField: max_tokens
+                  requiresReasoningContentOnAssistantMessages: true
+                  thinkingFormat: deepseek
