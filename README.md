@@ -44,39 +44,77 @@ No file in the DSH install is modified.
 ## Install
 
 Requires DSH with `@deepseek-ai/dsh-llm-pi-ai` (verified against `0.1.5-rc.1` / packages
-`0.1.5-rc.2`, pi-ai `0.85.1`).
+`0.1.5-rc.2`, pi-ai `0.85.1`) and `pnpm` on `PATH` — the `dsh plugin` command forwards to it.
 
-Point a profile patch row at this directory and configure a route on it. The plugin's
-config is the upstream schema, so a route takes the same fields a `llm-pi-ai` profile does:
+```sh
+dsh plugin --profile <profile> add github:evanw0211/dsh-opencode-session
+```
+
+That is the whole install. `dsh plugin` runs `pnpm add` in the profile directory and then
+reconciles `dsh.profile.bundles`: a dependency whose manifest declares `dsh.bundle` joins
+the layer stack automatically, so the profile manifest gains the entry by itself and the
+next boot loads this package's patch layer.
+
+Because the package is installed into the profile, its `import` of
+`@deepseek-ai/dsh-llm-pi-ai` resolves to the harness's own copy — hoisted at
+`$DSH_HOME/profiles/node_modules` — so the plugin shares the host's adapter instance rather
+than bundling a second one. That dependency is declared as an optional peer for exactly
+that reason.
+
+Out of the box the bundle ships one route — `opencode-go-chat`, carrying `deepseek-flash`
+on `https://opencode.ai/zen/go/v1` — and names a credential reference for it:
 
 ```yaml
-# $DSH_HOME/profiles/<profile>/cordis.patch.yml
+# this package's cordis.patch.yml, loaded as a base layer
 - insert:
     - id: opencode-session
-      name: /path/to/dsh-plugin-opencode-session/index.js
+      name: dsh-opencode-session
       config:
         providers:
           opencode-go-chat:
-            displayName: OpenCode Go · Chat
             apiKeyEnv: OPENCODE_GO_API_KEY
             api: openai-completions
             baseURL: https://opencode.ai/zen/go/v1
             models:
               - id: deepseek-flash
-                name: DeepSeek V4.1 Flash
-                contextWindow: 1000000
-                maxTokens: 256000
-                input: [text]
-                compat:
-                  supportsStore: false
-                  supportsDeveloperRole: false
-                  maxTokensField: max_tokens
-                  requiresReasoningContentOnAssistantMessages: true
-                  thinkingFormat: deepseek
+                # …capabilities and compat switches
 ```
 
-`apiKeyEnv` is a credential **reference**, not a value — the key itself stays in the
-harness credential store.
+`apiKeyEnv` is a credential **reference**, not a value: the key lives in the harness
+credential store (`$DSH_HOME/.credentials.yaml`) under that name and is resolved per
+request. If you already configured OpenCode — through the Models page, or from the shipped
+`opencode-go` route, which uses the same reference — nothing further is needed.
+
+> **These routes are not editable on Settings → Models.** That page edits the `llm-pi-ai`
+> settings namespace, and the plugin withholds the `settings` service from the upstream
+> adapter so it cannot claim that namespace a second time. Configure routes with a profile
+> patch row instead — see `cordis.patch.yml` for the shape. They do appear in the model
+> picker, which lists registered providers.
+
+### Adding a second protocol
+
+A route names one `api` — see below — so a second protocol needs a second row. Add it to
+your own profile patch, which sits above the bundle layer:
+
+```yaml
+# $DSH_HOME/profiles/<profile>/cordis.patch.yml
+- insert:
+    - id: opencode-session-messages
+      name: dsh-opencode-session
+      config:
+        providers:
+          opencode-go-messages:
+            displayName: OpenCode Go · Messages
+            apiKeyEnv: OPENCODE_GO_API_KEY
+            api: anthropic-messages
+            baseURL: https://opencode.ai/zen/go
+            models:
+              - id: minimax-m3
+              - id: qwen3.8-flash
+```
+
+The `baseURL` carries no `/v1` for Anthropic because pi-ai's Anthropic implementation
+appends `/v1/messages` itself.
 
 ### One protocol per route
 
@@ -94,22 +132,49 @@ two providers."*
   plugin throws a named error at load if it ever disappears — but it is outside the public
   type surface. The durable fix is upstream: teach pi-ai an `opencode` session-affinity
   format, or `dsh-llm-pi-ai` a per-route session-header option.
-- **Routes owned by this plugin are not editable on Settings → Models.** That page edits
-  the `llm-pi-ai` namespace, which the shipped adapter owns. The routes do appear in the
-  model picker.
 - **`settings` and `authorization` are withheld** from the shim, because the upstream
-  adapter would otherwise claim the `llm-pi-ai` settings namespace a second time.
+  adapter would otherwise claim the `llm-pi-ai` settings namespace a second time. The
+  consequence is above: routes are configured by patch row, not by the Models page.
 
-## Verify
+## Verified
 
-The header is observable without any credential: run a local echo server, point a route at
-it with `apiKeyEnv` set to a dummy value, and confirm the request carries
+End to end, against `dsh 0.1.5-rc.1` (packages `0.1.5-rc.2`, pi-ai `0.85.1`):
+
+```sh
+dsh --profile oplite --from-default-profile headless --dump-config
+dsh plugin --profile oplite add github:evanw0211/dsh-opencode-session
+dsh --profile oplite headless "reply with exactly: pong"      # → pong, exit 0
+```
+
+and the control, with `- id: opencode-session` + `disabled: true` in the profile patch,
+fails — so the route really is this package's:
+
+```
+dsh: NO_ADAPTER: no adapter registered for provider "opencode-go-chat"
+```
+
+A successful call is itself evidence for the header: OpenCode Go answers a request without
+it with `HTTP 400 MissingSessionID`.
+
+The header is also observable without any credential: run a local echo server, point a route
+at it with `apiKeyEnv` set to a dummy value, and confirm the request carries
 `x-opencode-session`, and that a request without a session id does not.
 
-## Rollback
+## Uninstall
 
-Remove the `insert` entry from the profile patch (or set `disabled: true` on it) and delete
-this directory. Nothing outside it changed.
+```sh
+dsh plugin --profile <profile> remove dsh-opencode-session
+```
+
+The reconciler drops it from `dsh.profile.bundles` by itself. To keep the package but stop
+its routes, disable the row in your profile patch:
+
+```yaml
+- id: opencode-session
+  disabled: true
+```
+
+Nothing outside the profile was modified — no file in the DSH install changes.
 
 ## License
 
