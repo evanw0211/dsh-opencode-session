@@ -1,0 +1,9 @@
+{
+  "name": "dsh-plugin-opencode-session",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Serves OpenCode Go routes through the shared llm-pi-ai adapter and puts a per-conversation session id on every request.",
+  "type": "module",
+  "main": "index.js",
+  "exports": "./index.js"
+}

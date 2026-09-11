@@ -1,0 +1,6 @@
+# The plugin is loaded by path with the harness install providing its
+# dependencies; a local node_modules is a symlink into that install and must
+# never be committed.
+node_modules
+*.log
+.DS_Store
