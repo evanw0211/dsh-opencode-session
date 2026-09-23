@@ -160,6 +160,41 @@ The header is also observable without any credential: run a local echo server, p
 at it with `apiKeyEnv` set to a dummy value, and confirm the request carries
 `x-opencode-session`, and that a request without a session id does not.
 
+### Shim compatibility
+
+The shim the upstream `apply()` mounts on is a **proxy over this plugin's own context**
+(see `shimContext()`), so it follows the adapter wherever it reads one. An enumerated
+hand-written shim cannot: pi-ai `0.1.7-alpha.2` reads its fiber
+(`ctx.fiber.entry?.options.id`) and registers fiber-scoped listeners through `ctx.on` — the
+`internal/config` serviceability guard and the `loader/volatile-update` route
+re-registration — and a shim that listed neither failed the whole profile entry at load:
+
+```
+dsh: warning: 1 entry did not activate
+opencode-session (dsh-opencode-session): TypeError: Cannot read properties of undefined (reading 'entry')
+    at apply (.../dsh-llm-pi-ai/lib/index.js:2531:31)
+```
+
+## Test
+
+`npm test` mounts the plugin on a real Cordis context against the **installed**
+`@deepseek-ai/dsh-llm-pi-ai`, and covers the regression above: the fiber must reach the
+active state, the configured route must reach `llm.registerAdapter`, the withheld
+`settings` service must stay untouched, and the dispatch wrapper must add
+`x-opencode-session` per request while leaving a session-less call alone.
+
+The two harness packages must resolve for that, which in a profile install they already do
+and in a bare checkout does not. `node_modules` is a symlink into the harness install (see
+`.gitignore`); point it at the install running the profile:
+
+```sh
+DSH_DEPS="$(dirname "$(readlink -f "$(command -v dsh)")")/../node_modules/@deepseek-ai"
+mkdir -p node_modules/@deepseek-ai
+ln -sfn "$DSH_DEPS/cordis" node_modules/@deepseek-ai/cordis
+ln -sfn "$DSH_DEPS/dsh-llm-pi-ai" node_modules/@deepseek-ai/dsh-llm-pi-ai
+npm test
+```
+
 ## Uninstall
 
 ```sh
