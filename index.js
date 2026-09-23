@@ -34,6 +34,14 @@
  * not appear in the Models settings page (they do appear in the model picker,
  * which lists registered providers).
  *
+ * The shim is this plugin's own context, not a fresh object built from a list
+ * of expected members: the upstream `apply()` also reads its fiber
+ * (`ctx.fiber.entry?.options.id`) and registers fiber-scoped listeners through
+ * `ctx.on` — the `internal/config` serviceability guard and the
+ * `loader/volatile-update` route re-registration. Only the withheld services
+ * and the `llm` registration point are replaced; every other member is the real
+ * context's, so a later upstream release reading another one still works.
+ *
  * The one internal it reads is the adapter instance's `config` field, which the
  * upstream constructor assigns and every one of its methods closes over. A
  * change there fails loudly at plugin load rather than at request time.
@@ -144,17 +152,31 @@ function withOpenCodeSession(base) {
 }
 
 /**
- * Mount the OpenCode Go routes this plugin's entry configures.
+ * The context the upstream `apply()` mounts on: this plugin's own context with
+ * the two withheld services hidden and the `llm` registration point wrapped.
  *
- * @param ctx - the plugin context; `ctx.llm` receives the wrapped adapter.
- * @param config - the upstream `{ providers }` configuration.
+ * A proxy over the real context rather than a hand-written object, because the
+ * upstream `apply()` reads more of a context than such a list keeps up with.
+ * pi-ai 0.1.7-alpha.2 added two reads — `ctx.fiber.entry?.options.id` and
+ * `ctx.on` — and an enumerated shim made the whole entry fail at load with
+ * `Cannot read properties of undefined (reading 'entry')`. Delegation is the
+ * point: only the withholding and the `llm` seam are ours.
+ *
+ * @param ctx - the plugin context.
+ * @returns the context to hand the upstream `apply()`.
  */
-export function apply(ctx, config) {
+function shimContext(ctx) {
   const llm = ctx.llm
-  const shim = {
+  const overrides = {
+    // A withheld service reads as absent; everything else is the real service.
     get: (service) => (WITHHELD_SERVICES.has(service) ? undefined : ctx.get(service)),
-    inject: () => () => {},
-    logger: ctx.logger,
+    // An injection asking for a withheld service resolves to nothing, which is
+    // how Cordis reports an absent service: the callback simply never runs.
+    inject: (services, callback) => {
+      const wanted = Array.isArray(services) ? services : [services]
+      if (wanted.some((service) => WITHHELD_SERVICES.has(service))) return () => {}
+      return ctx.inject(services, callback)
+    },
     llm: {
       registerAdapter: (routes, adapter) => llm.registerAdapter(routes, withOpenCodeSession(adapter)),
       // The configurable-provider directory belongs to the `llm-pi-ai` settings
@@ -164,7 +186,25 @@ export function apply(ctx, config) {
       registerModelDiscovery: () => () => {},
     },
   }
-  applyPiAiAdapter(shim, config)
-  const routes = Object.keys((config ?? {}).providers ?? {})
+  return new Proxy(ctx, {
+    get(target, property) {
+      if (Object.hasOwn(overrides, property)) return overrides[property]
+      const value = Reflect.get(target, property, target)
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
+/**
+ * Mount the OpenCode Go routes this plugin's entry configures.
+ *
+ * @param ctx - the plugin context; `ctx.llm` receives the wrapped adapter.
+ * @param config - the upstream `{ providers }` configuration.
+ */
+export function apply(ctx, config) {
+  applyPiAiAdapter(shimContext(ctx), config)
+  // `config.providers` is Cordis's resolved accessor, so read it through `get()`.
+  const providers = typeof config?.providers?.get === 'function' ? config.providers.get() : config?.providers
+  const routes = Object.keys(providers ?? {})
   ctx.logger?.info?.(`opencode-session: serving ${routes.join(', ')} with ${SESSION_HEADER}`)
 }
